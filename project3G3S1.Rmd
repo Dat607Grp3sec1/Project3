@@ -1,0 +1,412 @@
+---
+title: "Project3: Data Skills"
+date: "October 22, 2017"
+output: html_document
+---
+
+```{r, echo=FALSE}
+#filelocation <- 'C:\\Users\\eptrs\\Desktop\\CUNY\\Data607_DataAcquisition\\Project\\Project 3\\'
+filelocation <- 'https://raw.githubusercontent.com/Dat607Grp3sec1/Project3/master/'
+
+```
+
+
+# **What data scientist skills are most valued by employers?**  
+
+## **Overview**  
+In this project we provided an answer to the question: "What skills do employers look for in a data scientist?"
+
+
+### **The Team**
+
+* Eric Pitruzzella
+* Vikas Sinha
+* Brian Liles
+* Lin Ye
+
+### **Tools**  
+
+For this exercise, we used the following tools:  
+
+* Slack - collaboration  
+* GitHub - file repository, Source Code Management (SCM)  
+* R - analysis
+* R Markdown - code documentation  
+* MySQL - data storage  
+* Python - web scraping  
+
+
+##**Part A: Collecting Data for Our Analysis**  
+
+###* The Data Collecting
+
+  We determined that the job aggregator site, Indeed, would to be the best source of data for our purposes. Indeed prides itself on being the largest job site in the country. We also liked that Indeed lists all our relevant data on the results page of our job search query.
+  
+  Python was used as the web scraper using the Beautiful Soup library where data can be stripped by HTML tag.  The code passed a url requesting “data scientist” jobs for 3  experience levels (entry level, mid level and senior level): 'https://www.indeed.com/jobs?q=data+scientist&explvl=' + str(exp) + '&start='+ str(start).  
+  
+  The python code sent requests for results at 10 jobs at a time for 3,000 jobs in total. However, Indeed has implemented the idea of “sponsored jobs” where employers can pay for their job description to appear in the results page no matter what is returned by the job search query. As a preliminary data cleansing step, the python code excluded job descriptions that had a “sponsored” tag. 
+
+
+The list of 3,000 jobs with their respective skills were then saved to a comma delimited file.
+
+Python Code
+```{python, echo=FALSE}
+
+import requests
+import bs4
+from bs4 import BeautifulSoup
+import pandas as pd
+import time
+
+#This was set to the 3 exp levels. Set to 1 for rmd file
+#exp_lev = ['entry_level' , 'mid_level', 'senior_level']
+exp_lev = ['entry_level' ]
+columns = ["Page Num", "Experience", "job_title", "company_name", "location", "skills"]
+sample_df = pd.DataFrame(columns = columns)
+#This was set to 1000, set to 1 for rmd file
+#last_page = 1000 
+last_page = 1
+for exp in exp_lev:
+     for start in range(0, last_page, 10):
+          #url='https://www.indeed.com/jobs?q=data+scientist&start='+ str(start)
+          url = 'https://www.indeed.com/jobs?q=data+scientist&explvl=' + str(exp) + '&start='+ str(start)
+          page = requests.get(url)     
+          print(url)
+          time.sleep(1)  #ensuring at least 1 second between page grabs
+          soup = BeautifulSoup(page.text, "lxml", from_encoding="utf-8")
+          for div in soup.find_all(name="div", attrs={"class":"row"}):
+               sponsered = div.find_all(name="span", attrs={"class":" sponsoredGray "}) 
+               if len(sponsered) == 0:
+                    num = (len(sample_df) + 1)
+                    #print(num) 
+               #creating an empty list to hold the data for each posting
+                    job_post = [] 
+             #Page num
+             
+                    job_post.append(str(start))
+             #experience Level
+                    job_post.append(exp)
+             #job title
+                    for a in div.find_all(name="a", attrs={"data-tn-element":"jobTitle"}):
+                         job_post.append(a["title"])
+             # company name
+                    company = div.find_all(name="span", attrs={"class":"company"}) 
+                    if len(company) > 0: 
+                         for b in company:
+                              job_post.append(b.text.strip()) 
+                    else: 
+                         sec_try = div.find_all(name="span", attrs={"class":"result-link-source"})
+                         for span in sec_try:
+                              job_post.append(span.text)               
+                              if len(sec_try) == 0: 
+                                   job_post.append("none")  
+               # location name
+                    c = div.findAll('span', attrs={'class': 'location'})
+                    for span in c: 
+                         job_post.append(span.text) 
+                         if len(c) == 0: 
+                              job_post.append("NA") 
+               # Skills
+                    d = div.findAll('span', attrs={'class': 'experienceList'})
+                    if len(d) > 0:
+                         for span in d:
+                              job_post.append(span.text)  
+                    else:
+                         job_post.append("No Experience Listed") 
+                    #print(job_post)          
+                    sample_df.loc[num] = job_post
+#saving sample_df as a local csv file — define your own local path to save contents 
+#     sample_df.to_csv("job_list.csv", encoding='utf-8')
+```
+
+
+
+###* The Data Cleanup
+
+The original raw data needed some tidying. We needed to remove white spaces and split out some single columns into multiple ones for skills and location.
+
+Load libraries and data file
+
+```{r warning = FALSE, message = FALSE}
+library(dplyr)
+library(tidyr)
+library(reshape2)
+library(stringr)
+library(knitr)
+library(rmdformats)
+
+tmp <- paste(filelocation, "job_list.csv", sep="")
+rawdat <- read.delim(tmp, header=FALSE, sep=",", skip = 1,  stringsAsFactors = FALSE)
+
+```
+
+
+Clean data and tidy the format 
+
+```{r}
+#Last column contains list of skill that are coma separated. Need to split them into columns
+rawdf <- rawdat  %>% separate(V7, c("A1","A2","A3","A4","A5","A6","A7","A8","A9","A10","A11","A12","A13","A14","A15","A16","A17","A18","A19","A20"),sep = ",")
+
+#remove columns we don't need
+rawdf [, 2:6]<-NULL
+
+#Each job has an ID with multiple columns, Need to Create a name/value pair with one ID and one skill per line. This will be loaded into the db. The key will be the ID value.
+
+skilldf <- melt(rawdf,id.vars=c("V1"))
+
+#take the location and split it into city and state
+location <- rawdat  %>% separate(V6, c("cit","state"),sep = ",")
+#remove columns we don't need
+location [, 2:5]<-NULL
+location [, 4]<-NULL
+#get rid of leading whitespaces
+skilldf$value<-trimws(skilldf$value,which=c("left"))
+
+#rename the columns to more understandable values
+
+names(skilldf)[names(skilldf)=="V1"] <- "ID"
+names(skilldf)[names(skilldf)=="variable"] <- "skillord"
+names(skilldf)[names(skilldf)=="value"] <- "skill"
+
+names(rawdat)[names(rawdat)=="V1"] <- "ID"
+names(rawdat)[names(rawdat)=="V2"] <- "page"
+names(rawdat)[names(rawdat)=="V3"] <- "level"
+names(rawdat)[names(rawdat)=="V4"] <- "jobdesc"
+names(rawdat)[names(rawdat)=="V5"] <- "company"
+names(rawdat)[names(rawdat)=="V6"] <- "locale"
+names(rawdat)[names(rawdat)=="V7"] <- "skill"
+
+names(location)[names(location)=="V1"] <- "ID"
+
+```
+
+
+
+###* The Data Loading
+
+We created a database in MySQL with 3 tables:
+
+Jobs – the main job listing table with job description, company, location and skill list stored as free form text.
+Location – contains the city and state
+Skillset – contains the list of skills from each job description with each individual skill mapped to a job ID.
+
+
+![ ](https://raw.githubusercontent.com/Dat607Grp3sec1/Project3/master/eer_diag.png?raw=true)
+
+
+A DB created in MySQL was named project3_db. (we commented out  this code since the database was local and due to time constraints not added as a cloud service)
+
+```{r}
+library(RMySQL)
+#mydb = dbConnect(MySQL(), user='proj3', password='cunydb123', dbname='project3_db', host='localhost')
+```
+
+Created tables from the data frames 
+
+```{r}
+####  Commented out - run this when you're ready to create the tables
+#dbSendQuery(mydb, 'drop table if exists jobs')
+#dbWriteTable(mydb, name='jobs', value=rawdat)
+
+#dbSendQuery(mydb, 'drop table if exists skillset')
+#dbWriteTable(mydb, name='skillset', value=skilldf)
+
+#dbSendQuery(mydb, 'drop table if exists location')
+#dbWriteTable(mydb, name='location', value=location)
+
+#dbListTables(mydb)
+
+
+```
+
+
+##**Part B: Analysis and Visuals**  
+
+Next we performed an analysis of phrases that we saw most often and then grouped them by subcategories.
+
+
+Load the job listings data.
+
+```{r}
+tmp <- paste(filelocation, "job_list.csv", sep="")
+rawdat <- read.delim(tmp, header=TRUE, sep=",", stringsAsFactors = FALSE)
+dim(rawdat)
+names(rawdat)
+```
+
+
+Remove the rows that show skillset as "No Experience Listed"
+```{r}
+rawdat <- subset(rawdat, str_detect(skills, "No Experience Listed") == FALSE)
+dim(rawdat)
+```
+
+
+Add skills and experience columns to dataframe.
+```{r}
+
+skill_list <- vector(mode = "list", length = length(rawdat$skills))
+rawdat$skill_list <- skill_list
+rawdat$exp <- as.factor(rawdat$Experience)
+
+```
+
+
+Read and parse the job listing information.
+Build skill data per job listing row.
+
+```{r}
+
+for (i in 1:nrow(rawdat)) {
+
+    # Split the skillset string in the original dataframe. This string is a
+    # comma-delimited list of strings.
+    
+    skillset <- unlist(strsplit(rawdat$skills[i], ","))
+
+    # Trim leading and trailing spaces.
+    skillset <- unlist(lapply(skillset, trimws))
+
+    # Update skill list as list of factors per row.
+    rawdat$skill_list[[i]] <- rbind(rawdat$skill_list[[i]], skillset)
+}
+
+
+```
+
+
+###Top 10 most sought-after data science skills.
+
+rbind, lapply are used to create a list of all skills in dataframe.
+The summary function gives the frequency of the first "maxsum - 1" elements.
+
+```{r}
+sl_all <- as.factor(unlist(lapply(rawdat$skill_list, rbind)))
+summary_all <- summary(sl_all, maxsum = 11)
+
+# Remove the "(Other)" entry
+length(summary_all) <- length(summary_all) - 1
+
+kable(summary_all)
+
+barplot(summary_all,cex.names=0.5) 
+```
+
+
+Show the most valued skills per experience level.
+
+
+###Entry level most valued skills.
+
+```{r}
+entry.df <- subset(rawdat, exp == "entry_level")
+sl.entry <- as.factor(unlist(lapply(entry.df$skill_list, rbind)))
+summary.entry <- summary(sl.entry, maxsum = 11)
+
+# Remove the "(Other)" entry
+length(summary.entry) <- length(summary.entry) - 1
+
+kable(summary.entry)
+barplot(summary.entry,cex.names=0.5) 
+
+
+```
+
+
+###Mid level most valued skills
+```{r}
+mid.df <- subset(rawdat, exp == "mid_level")
+sl.mid <- as.factor(unlist(lapply(mid.df$skill_list, rbind)))
+summary.mid <- summary(sl.mid, maxsum = 11)
+
+# Remove the "(Other)" entry
+length(summary.mid) <- length(summary.mid) - 1
+
+kable(summary.mid)
+barplot(summary.mid,cex.names=0.5) 
+
+
+```
+
+###Senior level most valued skills
+```{r}
+senior.df <- subset(rawdat, exp == "senior_level")
+sl.senior <- as.factor(unlist(lapply(senior.df$skill_list, rbind)))
+summary.senior <- summary(sl.senior, maxsum = 11)
+
+# Remove the "(Other)" entry
+length(summary.senior) <- length(summary.senior) - 1
+
+kable(summary.senior)
+barplot(summary.senior,cex.names=0.5) 
+
+```
+
+
+###The top 5 most common locations for data science job openings
+
+```{r}
+N <- 5
+# Top N most common locations.
+rawdat$location_af <- as.factor(rawdat$location)
+summary.location <- summary(rawdat$location_af, N+1)
+
+# Remove the "(Other)" entry
+length(summary.location) <- length(summary.location) - 1
+
+
+kable(summary.location)
+barplot(summary.location,cex.names=0.5) 
+```
+
+
+###What are the most valued skills in the top 5 most common locations?
+Here we show the most valued skills in the top N=5 most common locations
+taken as a group.
+
+```{r}
+top_cities <- c(names(summary.location))
+
+print(top_cities)
+top_cities <- as.factor(top_cities)
+
+# Filter full listing based on city value being in the top cities list
+cities.df <- subset(rawdat, location %in% top_cities)
+sl.cities <- as.factor(unlist(lapply(cities.df$skill_list, rbind)))
+summary.cities <- summary(sl.cities, maxsum = 11)
+
+# Remove the "(Other)" entry
+length(summary.cities) <- length(summary.cities) - 1
+
+kable(summary.cities)
+barplot(summary.cities,cex.names=0.5) 
+```
+
+
+###Most valued skills in each of the top 5 most common cities.
+
+```{r}
+
+for (city_index in 1:length(top_cities)) {
+    # Filter full listing based on city value.
+    # Print the city for which this applies.
+    
+    print(top_cities[city_index])
+    city.df <- subset(rawdat, location == top_cities[city_index])
+    sl.city <- as.factor(unlist(lapply(city.df$skill_list, rbind)))
+    summary.city <- summary(sl.city, maxsum = 11)
+
+    # Remove the "(Other)" entry
+    length(summary.city) <- length(summary.city) - 1
+    
+    print(summary.city)
+
+
+}
+
+```
+
+
+#Conclusion:
+ As seen from our results the top skills needed by employers are Machine Learning,Python and R by a wide margin. Interestingly enough "Data Science" is listed as an important skill. This could be due to the idea that data science evolved as a skill before the actual job title and thus was carried over from other jobs. 
+
